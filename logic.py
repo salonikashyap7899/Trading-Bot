@@ -338,8 +338,6 @@ def execute_trade_action(
     user_units, user_lev, margin_mode,
     tp1, tp1_pct, tp2
 ):
-    """FIX: Execute trade with proper TP/SL orders on Binance"""
-    
     can_trade, limit_msg = check_trade_limits(symbol)
     if not can_trade:
         return {"success": False, "message": limit_msg}
@@ -347,78 +345,112 @@ def execute_trade_action(
     try:
         client = get_client()
         if client is None:
-            return {"success": False, "message": "❌ Binance client not connected"}
-            
+            return {"success": False, "message": "Binance client not connected"}
+
         units = user_units if user_units > 0 else sizing["suggested_units"]
         qty = round_qty(symbol, units)
 
         leverage = int(user_lev) if user_lev > 0 else sizing["max_leverage"]
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        print(f"✅ Leverage set to {leverage}x for {symbol}")
 
         try:
             client.futures_change_margin_type(symbol=symbol, marginType=margin_mode)
-            print(f"✅ Margin mode set to {margin_mode}")
-        except BinanceAPIException as e:
-            if "No need to change margin type" not in str(e):
-                print(f"⚠️ Margin mode warning: {e}")
+        except BinanceAPIException:
+            pass
 
         entry_side = Client.SIDE_BUY if side == "LONG" else Client.SIDE_SELL
         exit_side = Client.SIDE_SELL if side == "LONG" else Client.SIDE_BUY
 
-        print(f"\n📊 Placing {side} order: {qty} {symbol} @ market price")
+        # ================= ENTRY =================
         entry_order = client.futures_create_order(
             symbol=symbol,
             side=entry_side,
             type="MARKET",
             quantity=qty
         )
-        print(f"✅ Entry order placed: {entry_order['orderId']}")
-        
-        time.sleep(1)
-        mark = float(client.futures_mark_price(symbol=symbol)["markPrice"])
-        actual_entry = mark
-        print(f"📍 Entry price: {actual_entry}")
 
-        # FIX #3: STOP LOSS - Properly place on Binance
-        sl_price_value = None
+        time.sleep(1)
+        actual_entry = float(client.futures_mark_price(symbol=symbol)["markPrice"])
+
+        # ================= STOP LOSS =================
         sl_order_id = None
+        sl_price_value = None
+
         if sl_value > 0:
             sl_percent = sl_value if sl_type == "SL % Movement" else abs(entry - sl_value) / entry * 100
-            
-            if side == "LONG":
-                sl_price = actual_entry * (1 - sl_percent / 100)
-            else:
-                sl_price = actual_entry * (1 + sl_percent / 100)
-            
+
+            sl_price = (
+                actual_entry * (1 - sl_percent / 100)
+                if side == "LONG"
+                else actual_entry * (1 + sl_percent / 100)
+            )
+
             sl_price = round_price(symbol, sl_price)
             sl_price_value = sl_price
 
-            try:
-                print(f"\n🛑 Placing SL order @ {sl_price}")
-                sl_order = client.futures_create_order(
-                    symbol=symbol,
-                    side=exit_side,
-                    type="STOP_MARKET",
-                    stopPrice=sl_price,
-                    closePosition="true"
-                )
-                sl_order_id = sl_order['orderId']
-                print(f"✅ Stop Loss PLACED on Binance: Order ID {sl_order_id}")
-            except BinanceAPIException as e:
-                print(f"❌ SL Order Error: {e}")
-                traceback.print_exc()
-                # Close position if SL fails
-                try:
-                    client.futures_create_order(
-                        symbol=symbol,
-                        side=exit_side,
-                        type="MARKET",
-                        quantity=qty
-                    )
-                except:
-                    pass
-                return {"success": False, "message": f"Trade closed - SL placement failed: {str(e)}"}
+            sl_order = client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="STOP_MARKET",
+                stopPrice=sl_price,
+                closePosition=True,
+                workingType="MARK_PRICE",
+                priceProtect=True
+            )
+
+            sl_order_id = sl_order["orderId"]
+
+        # ================= TP1 =================
+        tp1_order_id = None
+        if tp1 > 0 and tp1_pct > 0:
+            tp1_qty = round_qty(symbol, qty * (tp1_pct / 100))
+            tp1_price = round_price(symbol, tp1)
+
+            tp1_order = client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=tp1_price,
+                quantity=tp1_qty,
+                workingType="MARK_PRICE",
+                priceProtect=True
+            )
+            tp1_order_id = tp1_order["orderId"]
+
+        # ================= TP2 =================
+        tp2_order_id = None
+        if tp2 > 0:
+            tp2_price = round_price(symbol, tp2)
+
+            tp2_order = client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=tp2_price,
+                closePosition=True,
+                workingType="MARK_PRICE",
+                priceProtect=True
+            )
+            tp2_order_id = tp2_order["orderId"]
+
+        update_trade_stats(symbol)
+
+        return {
+            "success": True,
+            "message": "✅ Order placed with SL & TP",
+            "order_ids": {
+                "entry": entry_order["orderId"],
+                "sl": sl_order_id,
+                "tp1": tp1_order_id,
+                "tp2": tp2_order_id
+            }
+        }
+
+    except BinanceAPIException as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
 
         # FIX #3: TAKE PROFIT 1
         tp1_order_id = None
