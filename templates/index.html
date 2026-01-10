@@ -202,28 +202,16 @@
 </div>
 
 <script>
+/* =========================
+   GLOBAL FLAGS
+========================= */
 let isEditingSL = false;
 
-/* ===========================
-   SL INPUT FOCUS HANDLING
-=========================== */
-document.addEventListener("focusin", (e) => {
-    if (e.target.id && e.target.id.startsWith("sl_adjust_")) {
-        isEditingSL = true;
-    }
-});
-
-document.addEventListener("focusout", (e) => {
-    if (e.target.id && e.target.id.startsWith("sl_adjust_")) {
-        isEditingSL = false;
-    }
-});
-
-/* ===========================
+/* =========================
    LIVE POSITIONS
-=========================== */
+========================= */
 function updateLivePositions() {
-    if (isEditingSL) return; // 🔒 DO NOT refresh while editing SL
+    if (isEditingSL) return;
 
     fetch('/get_open_positions')
         .then(r => r.json())
@@ -232,135 +220,133 @@ function updateLivePositions() {
             document.getElementById('position_count').textContent = data.count || 0;
 
             let totalOrders = 0;
-            data.positions?.forEach(p => totalOrders += p.open_orders?.length || 0);
+            (data.positions || []).forEach(p => {
+                totalOrders += p.open_orders ? p.open_orders.length : 0;
+            });
             document.getElementById('orders_count').textContent = totalOrders;
 
             if (!data.positions || data.positions.length === 0) {
                 container.innerHTML =
-                    '<div style="text-align:center;color:#555;padding:10px;">✅ No open positions</div>';
+                    '<div style="text-align:center;color:#555">✅ No open positions</div>';
                 return;
             }
 
             let html = '';
             data.positions.forEach(pos => {
+                const pnlColor = pos.unrealized_pnl >= 0 ? '#00ff88' : '#ff4d4d';
+                const roiColor = pos.roi_percent >= 0 ? '#00ff88' : '#ff4d4d';
+
                 html += `
-                <div style="border:1px solid #1a3a4a;padding:10px;margin-bottom:10px;background:#0a1520;">
-                    <b style="color:${pos.side==='LONG'?'#00ff88':'#ff4d4d'}">
-                        ${pos.side} ${pos.symbol}
-                    </b>
-                    <div style="font-size:11px;margin-top:5px;">
-                        Entry: ${pos.entry_price} | Mark: ${pos.mark_price}
+                <div style="border:1px solid #1a3a4a;padding:10px;margin-bottom:10px">
+                    <b>${pos.symbol}</b> | ${pos.side} | ${pos.leverage}x
+                    <div style="color:${pnlColor}">
+                        PNL: ${pos.unrealized_pnl.toFixed(2)}
+                    </div>
+                    <div style="color:${roiColor}">
+                        ROI: ${pos.roi_percent.toFixed(2)}%
                     </div>
 
-                    <div style="margin-top:8px;">
-                        <input
-                            type="number"
-                            id="sl_adjust_${pos.symbol}"
-                            step="0.1"
-                            min="-1"
-                            max="0"
-                            placeholder="-0.5"
-                            style="width:120px;background:#111;color:#fff;border:1px solid #333;"
-                        />
-                        <button onclick="updateSL('${pos.symbol}')"
-                                style="margin-left:5px;background:#1a4d2e;color:#00ff88;">
-                            Update SL
-                        </button>
-                    </div>
+                    <input type="number"
+                        id="sl_adjust_${pos.symbol}"
+                        step="0.1"
+                        min="-1"
+                        max="0"
+                        placeholder="SL %"
+                        onfocus="isEditingSL=true"
+                        onblur="isEditingSL=false">
+
+                    <button onclick="updateSL('${pos.symbol}')">
+                        Update SL
+                    </button>
                 </div>`;
             });
 
             container.innerHTML = html;
         })
-        .catch(err => console.log(err));
+        .catch(() => {
+            document.getElementById('live_positions').innerHTML =
+                '<div style="color:red">Error loading positions</div>';
+        });
 }
 
-/* ===========================
+/* =========================
+   TRADE HISTORY
+========================= */
+function updateTradeHistory() {
+    fetch('/get_trade_history')
+        .then(r => r.json())
+        .then(data => {
+            const box = document.getElementById('trade_history');
+            if (!data.trades || data.trades.length === 0) {
+                box.innerHTML =
+                    '<div style="color:#555;text-align:center">No trades yet</div>';
+                return;
+            }
+
+            box.innerHTML = data.trades.slice(0, 20).map(t => `
+                <div>
+                    ${t.side} ${t.symbol} |
+                    PNL: ${t.realized_pnl.toFixed(2)}
+                </div>
+            `).join('');
+        });
+}
+
+/* =========================
    UPDATE SL
-=========================== */
+========================= */
 function updateSL(symbol) {
     const input = document.getElementById(`sl_adjust_${symbol}`);
-    const value = parseFloat(input.value);
+    const val = parseFloat(input.value);
 
-    if (isNaN(value)) {
-        alert("Enter valid SL %");
-        return;
-    }
-
-    if (value < -1 || value > 0) {
+    if (isNaN(val) || val < -1 || val > 0) {
         alert("SL must be between -1 and 0");
         return;
     }
-
-    isEditingSL = true; // 🔒 Lock refresh
 
     fetch('/update_sl', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
             symbol: symbol,
-            new_sl_percent: value
+            new_sl_percent: val
         })
     })
     .then(r => r.json())
-    .then(data => {
-        alert(data.message);
+    .then(res => {
+        alert(res.message);
         input.value = '';
-        setTimeout(() => {
-            isEditingSL = false;
-            updateLivePositions();
-        }, 1500);
-    })
-    .catch(err => {
-        isEditingSL = false;
-        alert(err);
+        updateLivePositions();
     });
 }
 
-/* ===========================
+/* =========================
    LIVE PRICE
-=========================== */
+========================= */
 function updateLivePrice() {
     const symbol = document.querySelector('select[name="symbol"]').value;
-    const entryInput = document.getElementById('entry_input');
-
     fetch(`/get_live_price/${symbol}`)
         .then(r => r.json())
-        .then(data => {
-            if (!isEditingSL && data.price > 0) {
-                entryInput.value = data.price;
+        .then(d => {
+            if (d.price) {
+                document.getElementById('entry_input').value = d.price;
             }
         });
 }
 
-/* ===========================
-   TRADE HISTORY
-=========================== */
-function updateTradeHistory() {
-    fetch('/get_trade_history')
-        .then(r => r.json())
-        .then(data => {
-            const c = document.getElementById('trade_history');
-            c.innerHTML = data.trades?.slice(0, 10).map(t => `
-                <div style="border-bottom:1px solid #222;padding:5px;">
-                    ${t.side} ${t.symbol} | PnL: ${t.realized_pnl}
-                </div>`).join('') || 'No trades';
-        });
-}
-
-/* ===========================
+/* =========================
    INTERVALS
-=========================== */
-setInterval(updateLivePrice, 5000);
+========================= */
 setInterval(updateLivePositions, 3000);
 setInterval(updateTradeHistory, 5000);
+setInterval(updateLivePrice, 5000);
 
-/* ===========================
+/* =========================
    INITIAL LOAD
-=========================== */
-updateLivePrice();
+========================= */
 updateLivePositions();
 updateTradeHistory();
+updateLivePrice();
 </script>
 
 </body>
