@@ -294,8 +294,7 @@ def get_open_orders_for_symbol(symbol):
                 'orderId': order['orderId'],
                 'type': order['type'],
                 'side': order['side'],
-                'price': float(order.get('stopPrice') or order.get('price') or 0),
-
+                'price': float(order.get('stopPrice', order.get('price', 0))),
                 'origQty': float(order['origQty']),
                 'status': order['status']
             })
@@ -403,58 +402,37 @@ def execute_trade_action(
             sl_order_id = sl_order["orderId"]
 
         # ================= TP1 =================
-# ================= TAKE PROFIT =================
-remaining_qty = qty
+        tp1_order_id = None
+        if tp1 > 0 and tp1_pct > 0:
+            tp1_qty = round_qty(symbol, qty * (tp1_pct / 100))
+            tp1_price = round_price(symbol, tp1)
 
-# ---------- TP1 ----------
-tp1_order_id = None
-if tp1 > 0 and tp1_pct > 0:
-    tp1_price = round_price(symbol, tp1)
-    tp1_qty = round_qty(symbol, qty * (tp1_pct / 100))
+            tp1_order = client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=tp1_price,
+                quantity=tp1_qty,
+                workingType="MARK_PRICE",
+                priceProtect=True
+            )
+            tp1_order_id = tp1_order["orderId"]
 
-    try:
-        print(f"\n🎯 Placing TP1 order: {tp1_qty} @ {tp1_price}")
-        tp1_order = client.futures_create_order(
-            symbol=symbol,
-            side=exit_side,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=tp1_price,
-            quantity=tp1_qty,
-            reduceOnly=True,
-            workingType="MARK_PRICE",
-            priceProtect=True
-        )
-        tp1_order_id = tp1_order["orderId"]
-        remaining_qty -= tp1_qty
-        print(f"✅ TP1 PLACED: {tp1_order_id}")
-    except BinanceAPIException as e:
-        print(f"⚠️ TP1 Error: {e}")
-        traceback.print_exc()
+        # ================= TP2 =================
+        tp2_order_id = None
+        if tp2 > 0:
+            tp2_price = round_price(symbol, tp2)
 
-# ---------- TP2 ----------
-tp2_order_id = None
-if tp2 > 0 and remaining_qty > 0:
-    tp2_price = round_price(symbol, tp2)
-
-    try:
-        print(f"\n🎯 Placing TP2 order: {remaining_qty} @ {tp2_price}")
-        tp2_order = client.futures_create_order(
-            symbol=symbol,
-            side=exit_side,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=tp2_price,
-            quantity=round_qty(symbol, remaining_qty),
-            reduceOnly=True,
-            workingType="MARK_PRICE",
-            priceProtect=True
-        )
-        tp2_order_id = tp2_order["orderId"]
-        print(f"✅ TP2 PLACED: {tp2_order_id}")
-    except BinanceAPIException as e:
-        print(f"⚠️ TP2 Error: {e}")
-        traceback.print_exc()
-
-    
+            tp2_order = client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=tp2_price,
+                closePosition=True,
+                workingType="MARK_PRICE",
+                priceProtect=True
+            )
+            tp2_order_id = tp2_order["orderId"]
 
         update_trade_stats(symbol)
 

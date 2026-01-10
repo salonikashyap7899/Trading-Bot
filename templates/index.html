@@ -202,154 +202,330 @@
 </div>
 
 <script>
-/* =========================
-   GLOBAL FLAGS
-========================= */
-let isEditingSL = false;
+    // FIX #2 & #4: Enhanced live positions with REAL Binance data
+    function updateLivePositions() {
+        fetch('/get_open_positions')
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('live_positions');
+                const posCountEl = document.getElementById('position_count');
+                
+                // FIX #4: Update position count dynamically
+                if (posCountEl) {
+                    posCountEl.textContent = data.count || 0;
+                }
+                
+                // Count total open orders
+                let totalOrders = 0;
+                if (data.positions && data.positions.length > 0) {
+                    data.positions.forEach(pos => {
+                        totalOrders += pos.open_orders ? pos.open_orders.length : 0;
+                    });
+                }
+                const ordersCountEl = document.getElementById('orders_count');
+                if (ordersCountEl) {
+                    ordersCountEl.textContent = totalOrders;
+                }
+                
+                if (data.positions && data.positions.length > 0) {
+                    let html = '';
+                    data.positions.forEach(pos => {
+                        const pnlColor = pos.unrealized_pnl >= 0 ? '#00ff88' : '#ff4d4d';
+                        const pnlSymbol = pos.unrealized_pnl >= 0 ? '+' : '';
+                        const roiColor = pos.roi_percent >= 0 ? '#00ff88' : '#ff4d4d';
+                        const roiSymbol = pos.roi_percent >= 0 ? '+' : '';
+                        
+                        html += `
+                            <div style="border: 1px solid #1a3a4a; border-radius: 6px; padding: 12px; margin-bottom: 10px; background: #0a1520;" data-testid="position-${pos.symbol}">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <div>
+                                        <span style="background: ${pos.side === 'LONG' ? '#1a4d2e' : '#4d1a1a'}; color: ${pos.side === 'LONG' ? '#00ff88' : '#ff4d4d'}; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px;">
+                                            ${pos.symbol}
+                                        </span>
+                                        <span style="color: #888; font-size: 10px; margin-left: 8px;">
+                                            Perp | Isolated ${pos.leverage}x
+                                        </span>
+                                        <span style="color: #666; font-size: 9px; margin-left: 8px;">
+                                            🕐 ${pos.timestamp}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <button onclick="showPartialCloseModal('${pos.symbol}', ${pos.amount})" 
+                                                style="background: #3a3a3a; border: 1px solid #555; color: #fff; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; margin-right: 5px;"
+                                                data-testid="partial-close-${pos.symbol}">
+                                            📉 Partial
+                                        </button>
+                                        <button onclick="closePosition('${pos.symbol}')" 
+                                                style="background: #4d1a1a; border: 1px solid #ff4d4d; color: #ff4d4d; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 10px;"
+                                                data-testid="close-${pos.symbol}">
+                                            ✕ Close
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px;">
+                                    <div>
+                                        <div style="color: #888; font-size: 9px; margin-bottom: 2px;">Unrealized PNL (USDT)</div>
+                                        <div style="color: ${pnlColor}; font-weight: bold; font-size: 14px;" data-testid="pnl-${pos.symbol}">
+                                            ${pnlSymbol}${pos.unrealized_pnl.toFixed(2)}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style="color: #888; font-size: 9px; margin-bottom: 2px;">ROI</div>
+                                        <div style="color: ${roiColor}; font-weight: bold; font-size: 14px;" data-testid="roi-${pos.symbol}">
+                                            ${roiSymbol}${pos.roi_percent.toFixed(2)}%
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 10px;">
+                                    <div>
+                                        <div style="color: #888; font-size: 9px;">Size (USDT)</div>
+                                        <div style="color: #eee;">${pos.size_usdt.toFixed(4)}</div>
+                                    </div>
+                                    <div>
+                                        <div style="color: #888; font-size: 9px;">Margin (USDT)</div>
+                                        <div style="color: #eee;">${pos.margin_usdt.toFixed(2)}</div>
+                                    </div>
+                                    <div>
+                                        <div style="color: #888; font-size: 9px;">Margin Ratio</div>
+                                        <div style="color: ${pos.margin_ratio > 80 ? '#ff4d4d' : '#eee'};">${pos.margin_ratio.toFixed(2)}%</div>
+                                    </div>
+                                    <div>
+                                        <div style="color: #888; font-size: 9px;">Entry Price (USDT)</div>
+                                        <div style="color: #eee;">${pos.entry_price.toFixed(6)}</div>
+                                    </div>
+                                    <div>
+                                        <div style="color: #888; font-size: 9px;">Mark Price (USDT)</div>
+                                        <div style="color: #eee;">${pos.mark_price.toFixed(6)}</div>
+                                    </div>
+                                    <div>
+                                        <div style="color: #888; font-size: 9px;">Liq. Price (USDT)</div>
+                                        <div style="color: #ff4d4d;">${pos.liquidation_price.toFixed(6)}</div>
+                                    </div>
+                                </div>
 
-/* =========================
-   LIVE POSITIONS
-========================= */
-function updateLivePositions() {
-    if (isEditingSL) return;
-
-    fetch('/get_open_positions')
-        .then(r => r.json())
-        .then(data => {
-            const container = document.getElementById('live_positions');
-            document.getElementById('position_count').textContent = data.count || 0;
-
-            let totalOrders = 0;
-            (data.positions || []).forEach(p => {
-                totalOrders += p.open_orders ? p.open_orders.length : 0;
+                                <!-- FIX #6: Editable SL Section -->
+                                <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #1a3a4a;">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <div style="flex: 1;">
+                                            <label style="color: #888; font-size: 9px; display: block; margin-bottom: 3px;">
+                                                Adjust SL (-1% to 0% only)
+                                            </label>
+                                            <input type="number" 
+                                                   id="sl_adjust_${pos.symbol}" 
+                                                   step="0.1" 
+                                                   min="-1" 
+                                                   max="0" 
+                                                   placeholder="e.g., -0.5"
+                                                   style="width: 100%; padding: 4px; background: #111; border: 1px solid #333; color: #fff; border-radius: 3px; font-size: 10px;"
+                                                   data-testid="sl-input-${pos.symbol}">
+                                        </div>
+                                        <button onclick="updateSL('${pos.symbol}')" 
+                                                style="background: #1a4d2e; border: 1px solid #00ff88; color: #00ff88; padding: 4px 12px; border-radius: 3px; cursor: pointer; font-size: 10px; margin-top: 14px;"
+                                                data-testid="update-sl-${pos.symbol}">
+                                            Update SL
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div style="text-align: center; color: #555; padding-top: 10px;" data-testid="no-positions">✅ No open positions</div>';
+                }
+            })
+            .catch(err => {
+                console.log('Position update error:', err);
+                document.getElementById('live_positions').innerHTML = 
+                    '<div style="text-align: center; color: #ff4d4d; padding-top: 10px;">❌ Error loading positions</div>';
             });
-            document.getElementById('orders_count').textContent = totalOrders;
-
-            if (!data.positions || data.positions.length === 0) {
-                container.innerHTML =
-                    '<div style="text-align:center;color:#555">✅ No open positions</div>';
-                return;
-            }
-
-            let html = '';
-            data.positions.forEach(pos => {
-                const pnlColor = pos.unrealized_pnl >= 0 ? '#00ff88' : '#ff4d4d';
-                const roiColor = pos.roi_percent >= 0 ? '#00ff88' : '#ff4d4d';
-
-                html += `
-                <div style="border:1px solid #1a3a4a;padding:10px;margin-bottom:10px">
-                    <b>${pos.symbol}</b> | ${pos.side} | ${pos.leverage}x
-                    <div style="color:${pnlColor}">
-                        PNL: ${pos.unrealized_pnl.toFixed(2)}
-                    </div>
-                    <div style="color:${roiColor}">
-                        ROI: ${pos.roi_percent.toFixed(2)}%
-                    </div>
-
-                    <input type="number"
-                        id="sl_adjust_${pos.symbol}"
-                        step="0.1"
-                        min="-1"
-                        max="0"
-                        placeholder="SL %"
-                        onfocus="isEditingSL=true"
-                        onblur="isEditingSL=false">
-
-                    <button onclick="updateSL('${pos.symbol}')">
-                        Update SL
-                    </button>
-                </div>`;
-            });
-
-            container.innerHTML = html;
-        })
-        .catch(() => {
-            document.getElementById('live_positions').innerHTML =
-                '<div style="color:red">Error loading positions</div>';
-        });
-}
-
-/* =========================
-   TRADE HISTORY
-========================= */
-function updateTradeHistory() {
-    fetch('/get_trade_history')
-        .then(r => r.json())
-        .then(data => {
-            const box = document.getElementById('trade_history');
-            if (!data.trades || data.trades.length === 0) {
-                box.innerHTML =
-                    '<div style="color:#555;text-align:center">No trades yet</div>';
-                return;
-            }
-
-            box.innerHTML = data.trades.slice(0, 20).map(t => `
-                <div>
-                    ${t.side} ${t.symbol} |
-                    PNL: ${t.realized_pnl.toFixed(2)}
-                </div>
-            `).join('');
-        });
-}
-
-/* =========================
-   UPDATE SL
-========================= */
-function updateSL(symbol) {
-    const input = document.getElementById(`sl_adjust_${symbol}`);
-    const val = parseFloat(input.value);
-
-    if (isNaN(val) || val < -1 || val > 0) {
-        alert("SL must be between -1 and 0");
-        return;
     }
 
-    fetch('/update_sl', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            symbol: symbol,
-            new_sl_percent: val
+    // FIX #2: Update trade history with REAL Binance data
+    function updateTradeHistory() {
+        fetch('/get_trade_history')
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('trade_history');
+                if (data.trades && data.trades.length > 0) {
+                    let html = '';
+                    data.trades.slice(0, 20).forEach(trade => {
+                        const pnlColor = trade.realized_pnl >= 0 ? '#00ff88' : '#ff4d4d';
+                        const pnlSymbol = trade.realized_pnl >= 0 ? '+' : '';
+                        
+                        html += `
+                            <div style="border-bottom: 1px solid #222; padding: 5px 0; color: #eee;">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>
+                                        <b style="color: ${trade.side === 'LONG' ? '#00ff88' : '#ff4d4d'}">${trade.side}</b> 
+                                        ${trade.symbol} (${trade.qty})
+                                    </span>
+                                    <span style="color: #888; font-size: 10px;">🕐 ${trade.time}</span>
+                                </div>
+                                <div style="font-size: 10px; color: #bbb; margin-top: 2px;">
+                                    Price: ${trade.price} | 
+                                    PnL: <span style="color: ${pnlColor}">${pnlSymbol}${trade.realized_pnl.toFixed(4)}</span> | 
+                                    Fee: ${trade.commission}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div style="text-align: center; color: #555; padding-top: 20px;">📉 No trades yet</div>';
+                }
+            })
+            .catch(err => {
+                console.log('Trade history error:', err);
+            });
+    }
+
+    // FIX #1: Update trade limits display
+    function updateTradeLimits() {
+        fetch('/get_today_stats')
+            .then(r => r.json())
+            .then(data => {
+                const display = document.getElementById('total_trades_display');
+                if (display) {
+                    display.textContent = `${data.total_trades}/${data.max_trades}`;
+                }
+            })
+            .catch(err => console.log('Stats error:', err));
+    }
+
+    // FIX #5: Partial close modal
+    function showPartialCloseModal(symbol, totalAmount) {
+        const percent = prompt(`Partial Close ${symbol}\\n\\nEnter percentage to close (1-99):`, '50');
+        if (percent && percent > 0 && percent < 100) {
+            partialClosePosition(symbol, parseFloat(percent));
+        }
+    }
+
+    // FIX #5: Partial close position
+    function partialClosePosition(symbol, closePercent) {
+        fetch('/partial_close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({symbol: symbol, close_percent: closePercent})
         })
-    })
-    .then(r => r.json())
-    .then(res => {
-        alert(res.message);
-        input.value = '';
-        updateLivePositions();
-    });
-}
-
-/* =========================
-   LIVE PRICE
-========================= */
-function updateLivePrice() {
-    const symbol = document.querySelector('select[name="symbol"]').value;
-    fetch(`/get_live_price/${symbol}`)
         .then(r => r.json())
-        .then(d => {
-            if (d.price) {
-                document.getElementById('entry_input').value = d.price;
+        .then(data => {
+            alert(data.message);
+            if (data.success) {
+                updateLivePositions();
+                updateTradeHistory();
             }
-        });
-}
+        })
+        .catch(err => alert('Error: ' + err));
+    }
 
-/* =========================
-   INTERVALS
-========================= */
-setInterval(updateLivePositions, 3000);
-setInterval(updateTradeHistory, 5000);
-setInterval(updateLivePrice, 5000);
+    function closePosition(symbol) {
+        if(confirm(`Close entire position for ${symbol}?`)) {
+            fetch(`/close_position/${symbol}`, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    alert(data.message);
+                    if (data.success) {
+                        updateLivePositions();
+                        updateTradeHistory();
+                    }
+                })
+                .catch(err => alert('Error: ' + err));
+        }
+    }
 
-/* =========================
-   INITIAL LOAD
-========================= */
-updateLivePositions();
-updateTradeHistory();
-updateLivePrice();
+    function closeAllPositions() {
+        if(confirm('Close ALL positions?')) {
+            alert('Close all functionality - implement by iterating through positions');
+        }
+    }
+
+    // FIX #6: Update stop loss
+    function updateSL(symbol) {
+        const input = document.getElementById(`sl_adjust_${symbol}`);
+        const slPercent = parseFloat(input.value);
+        
+        if (isNaN(slPercent)) {
+            alert('Please enter a valid SL adjustment percentage');
+            return;
+        }
+        
+        if (slPercent < -1 || slPercent > 0) {
+            alert('SL adjustment must be between -1% and 0%');
+            return;
+        }
+        
+        fetch('/update_sl', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({symbol: symbol, new_sl_percent: slPercent})
+        })
+        .then(r => r.json())
+        .then(data => {
+            alert(data.message);
+            if (data.success) {
+                input.value = '';
+                updateLivePositions();
+            }
+        })
+        .catch(err => alert('Error: ' + err));
+    }
+
+    function updateLivePrice() {
+        const symbol = document.querySelector('select[name="symbol"]').value;
+        const orderType = document.getElementById('order_type_select').value;
+        const entryInput = document.getElementById('entry_input');
+
+        if (orderType === "MARKET") {
+            fetch(`/get_live_price/${symbol}`)
+                .then(r => r.json())
+                .then(data => { 
+                    if(data.price && data.price > 0) {
+                        entryInput.value = data.price;
+                    }
+                })
+                .catch(err => console.log('Price update error:', err));
+        }
+    }
+    
+    // Update intervals
+    setInterval(updateLivePrice, 5000);
+   setInterval(() => {
+    if (!isEditingSL) {
+        fetchPositions();
+    }
+}, 3000);
+
+    setInterval(updateTradeHistory, 5000);
+    setInterval(updateTradeLimits, 10000);
+    
+    // Initial updates
+    updateLivePrice();
+    updateLivePositions();
+    updateTradeHistory();
+    updateTradeLimits();
+
+
+  
+let isEditingSL = false;
+
+// Detect SL input focus
+document.addEventListener("focusin", (e) => {
+    if (e.target.id === "sl_update_input") {
+        isEditingSL = true;
+    }
+});
+
+// Detect blur (user leaves input)
+document.addEventListener("focusout", (e) => {
+    if (e.target.id === "sl_update_input") {
+        isEditingSL = false;
+    }
+});
 
 
 </script>
-
 </body>
 </html>
