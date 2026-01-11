@@ -378,7 +378,11 @@ def execute_trade_action(
         sl_price_value = None
 
         if sl_value > 0:
-            sl_percent = sl_value if sl_type == "SL % Movement" else abs(entry - sl_value) / entry * 100
+            sl_percent = (
+                sl_value
+                if sl_type == "SL % Movement"
+                else abs(entry - sl_value) / entry * 100
+            )
 
             sl_price = (
                 actual_entry * (1 - sl_percent / 100)
@@ -394,7 +398,8 @@ def execute_trade_action(
                 side=exit_side,
                 type="STOP_MARKET",
                 stopPrice=sl_price,
-                closePosition=True,
+                quantity=qty,
+                reduceOnly=True,
                 workingType="MARK_PRICE",
                 priceProtect=True
             )
@@ -403,6 +408,8 @@ def execute_trade_action(
 
         # ================= TP1 =================
         tp1_order_id = None
+        tp1_qty = None
+
         if tp1 > 0 and tp1_pct > 0:
             tp1_qty = round_qty(symbol, qty * (tp1_pct / 100))
             tp1_price = round_price(symbol, tp1)
@@ -413,25 +420,31 @@ def execute_trade_action(
                 type="TAKE_PROFIT_MARKET",
                 stopPrice=tp1_price,
                 quantity=tp1_qty,
+                reduceOnly=True,
                 workingType="MARK_PRICE",
                 priceProtect=True
             )
+
             tp1_order_id = tp1_order["orderId"]
 
         # ================= TP2 =================
         tp2_order_id = None
+
         if tp2 > 0:
             tp2_price = round_price(symbol, tp2)
+            remaining_qty = qty - tp1_qty if tp1_qty else qty
 
             tp2_order = client.futures_create_order(
                 symbol=symbol,
                 side=exit_side,
                 type="TAKE_PROFIT_MARKET",
                 stopPrice=tp2_price,
-                closePosition=True,
+                quantity=remaining_qty,
+                reduceOnly=True,
                 workingType="MARK_PRICE",
                 priceProtect=True
             )
+
             tp2_order_id = tp2_order["orderId"]
 
         update_trade_stats(symbol)
@@ -452,6 +465,7 @@ def execute_trade_action(
     except Exception as e:
         return {"success": False, "message": str(e)}
 
+
 def get_today_stats():
     """Get today's trade statistics"""
     today = datetime.utcnow().date().isoformat()
@@ -465,7 +479,9 @@ def get_today_stats():
 
 def live_trade_logger(symbol):
     try:
+        client = get_client()
         positions = client.futures_position_information(symbol=symbol)
+
         for p in positions:
             qty = float(p["positionAmt"])
             pnl = float(p["unRealizedProfit"])
@@ -474,5 +490,7 @@ def live_trade_logger(symbol):
                 print(f"📊 LIVE | {symbol} | Qty: {qty} | PnL: {pnl}")
             else:
                 print(f"✅ POSITION CLOSED | {symbol}")
+
     except Exception as e:
         print(f"⚠️ Live log error: {e}")
+
