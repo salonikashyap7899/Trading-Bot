@@ -7,6 +7,8 @@ import io
 
 app = Flask(__name__)
 app.secret_key = "trading_secret_key_ultra_secure_2025"
+
+# Use simple client-side sessions
 app.config['SESSION_PERMANENT'] = False
 
 @app.route("/get_live_price/<symbol>")
@@ -17,22 +19,19 @@ def live_price_api(symbol):
 
 @app.route("/get_open_positions")
 def get_open_positions_api():
-    """FIX #2 & #4: Returns REAL live positions from Binance with count"""
+    """FIXED: Returns REAL live positions from Binance with timestamps"""
     positions = logic.get_open_positions()
-    return jsonify({
-        "positions": positions,
-        "count": len(positions)  # FIX #4: Dynamic position count
-    })
+    return jsonify({"positions": positions})
 
 @app.route("/get_trade_history")
 def get_trade_history_api():
-    """FIX #2: Get REAL trade history from Binance"""
+    """FIX #1: Get COMPLETE trade history from Binance (500 trades)"""
     trades = logic.get_trade_history()
     return jsonify({"trades": trades})
 
 @app.route("/get_today_stats")
 def get_today_stats_api():
-    """FIX #1: Get today's trade statistics"""
+    """Get today's trade statistics for limit display"""
     stats = logic.get_today_stats()
     return jsonify(stats)
 
@@ -44,7 +43,7 @@ def close_position_api(symbol):
 
 @app.route("/partial_close", methods=["POST"])
 def partial_close_api():
-    """FIX #5: Partial close position"""
+    """Partial close position"""
     data = request.get_json()
     symbol = data.get('symbol')
     close_percent = data.get('close_percent')
@@ -58,7 +57,7 @@ def partial_close_api():
 
 @app.route("/update_sl", methods=["POST"])
 def update_sl_api():
-    """FIX #6: Update stop loss with -1% to 0% restriction"""
+    """FIX #4: Update stop loss with -1% to 0% restriction"""
     data = request.get_json()
     symbol = data.get('symbol')
     new_sl_percent = float(data.get('new_sl_percent', 0))
@@ -74,14 +73,17 @@ def download_trades():
     """Download trade history as CSV"""
     trades = logic.get_trade_history()
     
+    # Create CSV in memory
     output = io.StringIO()
     writer = csv.writer(output)
     
+    # Write header
     writer.writerow([
         'Time (UTC)', 'Symbol', 'Side', 'Quantity', 
         'Price', 'Realized PnL', 'Commission'
     ])
     
+    # Write trade data
     for trade in trades:
         writer.writerow([
             trade.get('time', ''),
@@ -93,6 +95,7 @@ def download_trades():
             trade.get('commission', '')
         ])
     
+    # Prepare response
     output.seek(0)
     return Response(
         output.getvalue(),
@@ -122,6 +125,7 @@ def index():
     sl_type = request.form.get("sl_type", "SL % Movement")
     sl_val = float(request.form.get("sl_value") or 0)
 
+    # FIX #3: TP Variables - Now MANDATORY
     tp1 = float(request.form.get("tp1") or 0)
     tp1_pct = float(request.form.get("tp1_pct") or 0)
     tp2 = float(request.form.get("tp2") or 0)
@@ -150,6 +154,7 @@ def index():
         session.modified = True
         return redirect(url_for("index"))
     
+    # Get today's stats for display
     today_stats = logic.get_today_stats()
     
     return render_template(
