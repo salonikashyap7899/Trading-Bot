@@ -156,10 +156,4 @@ If you find this project useful:
 
 ---
 
-If you want, next I can:
 
-* 🔥 Make it **more premium (GitHub-top-project level)**
-* 🧾 Customize it **exactly to your current bot features**
-* 🎨 Add **badges, images & architecture diagram**
-
-Just tell me 💙
