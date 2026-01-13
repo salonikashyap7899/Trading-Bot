@@ -18,9 +18,7 @@ _price_cache_time = {}
 CACHE_DURATION = 5  # Cache duration in seconds
 
 def binance_algo_order(symbol, side, order_type, stopPrice, quantity=None, closePosition=False):
-    """Universal ALGO order compatible with all Binance libraries"""
-
-    url = "https://fapi.binance.com/fapi/v1/algo/order"
+    url = "https://fapi.binance.com/fapi/v1/order"
     timestamp = int(time.time() * 1000)
 
     params = {
@@ -28,17 +26,17 @@ def binance_algo_order(symbol, side, order_type, stopPrice, quantity=None, close
         "side": side,
         "type": order_type,
         "stopPrice": stopPrice,
-        "timestamp": timestamp
+        "timestamp": timestamp,
+        "recvWindow": 10000
     }
 
-    if quantity:
-        params["quantity"] = quantity
-    
     if closePosition:
         params["closePosition"] = "true"
+    else:
+        params["reduceOnly"] = "true"
+        params["quantity"] = quantity
 
     query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-    
     signature = hmac.new(
         config.BINANCE_SECRET.encode(),
         query_string.encode(),
@@ -47,14 +45,12 @@ def binance_algo_order(symbol, side, order_type, stopPrice, quantity=None, close
 
     params["signature"] = signature
 
-    headers = {
-        "X-MBX-APIKEY": config.BINANCE_KEY
-    }
+    headers = {"X-MBX-APIKEY": config.BINANCE_KEY}
 
     r = requests.post(url, params=params, headers=headers)
     data = r.json()
 
-    print("🚀 ALGO ORDER RESPONSE:", data)
+    print("🚀 TP/SL ORDER RESPONSE:", data)
 
     if "orderId" in data:
         return {"success": True, "orderId": data["orderId"], "raw": data}
@@ -449,7 +445,7 @@ def execute_trade_action(
         sl_resp = binance_algo_order(
             symbol=symbol,
             side=exit_side,
-            order_type="STOP",
+            order_type="STOP_MARKET",
             stopPrice=sl_price,
             closePosition=True
         )
@@ -469,7 +465,7 @@ def execute_trade_action(
         tp1_resp = binance_algo_order(
             symbol=symbol,
             side=exit_side,
-            order_type="TAKE_PROFIT",
+          order_type="TAKE_PROFIT_MARKET",
             stopPrice=tp1_price,
             quantity=tp1_qty
         )
