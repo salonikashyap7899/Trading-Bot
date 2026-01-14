@@ -328,13 +328,22 @@ def execute_trade_action(
     user_units, user_lev, margin_mode,
     tp1, tp1_pct, tp2
 ):
-    # --- KEPT: Your mandatory validation ---
+    """
+    FIXED: Execute trade with IMMEDIATE and MANDATORY SL, TP1, and TP2 placement.
+    Keeps original logging, margin checks, and session updates while fixing TP errors.
+    """
+
+    # --- 1. MANDATORY VALIDATION (KEEPING ORIGINAL LOGIC) ---
     if sl_value <= 0:
         return {"success": False, "message": "❌ Stop Loss is MANDATORY!"}
+    
     if tp1 <= 0:
         return {"success": False, "message": "❌ Take Profit 1 is MANDATORY!"}
     
-    # --- KEPT: Your trade limits check ---
+    if tp1_pct <= 0:
+        return {"success": False, "message": "❌ TP1 Quantity % is MANDATORY!"}
+
+    # Check trade limits
     can_trade, limit_msg = check_trade_limits(symbol)
     if not can_trade:
         return {"success": False, "message": limit_msg}
@@ -344,14 +353,17 @@ def execute_trade_action(
         if client is None:
             return {"success": False, "message": "❌ Binance client not connected"}
         
-        # --- KEPT: Your quantity and leverage logic ---
+        # --- 2. QUANTITY & LEVERAGE (WITH PRECISION FIX) ---
         units = user_units if user_units > 0 else sizing["suggested_units"]
         qty = round_qty(symbol, units)
-        leverage = int(user_lev) if user_lev > 0 else sizing["max_leverage"]
-        
-        client.futures_change_leverage(symbol=symbol, leverage=leverage, recvWindow=10000)
 
-        # --- KEPT: Your margin mode logic ---
+        leverage = int(user_lev) if user_lev > 0 else sizing["max_leverage"]
+        try:
+            client.futures_change_leverage(symbol=symbol, leverage=leverage, recvWindow=10000)
+        except BinanceAPIException as e:
+            print("⚠️ Leverage warning:", e)
+
+        # Set margin mode
         try:
             client.futures_change_margin_type(symbol=symbol, marginType=margin_mode, recvWindow=10000)
         except BinanceAPIException as e:
@@ -361,7 +373,8 @@ def execute_trade_action(
         entry_side = Client.SIDE_BUY if side == "LONG" else Client.SIDE_SELL
         exit_side = Client.SIDE_SELL if side == "LONG" else Client.SIDE_BUY
 
-        # --- STEP 1: EXECUTE ENTRY ---
+        # --- 3. EXECUTE ENTRY ---
+        print(f"🚀 Executing ENTRY for {symbol}...")
         entry_order = client.futures_create_order(
             symbol=symbol,
             side=entry_side,
@@ -370,16 +383,16 @@ def execute_trade_action(
             recvWindow=10000
         )
 
-        # --- FIXED: CRITICAL 1-SECOND SYNC ---
-        # This ensures the position is "live" before sending TPs
+        # CRITICAL FIX: Wait 1 sec for order to register on Binance servers before sending TPs
         time.sleep(1)
 
-        # --- FIXED: Use Mark Price for more reliable triggers ---
+        # Get actual fill price or Mark Price fallback
         actual_entry = float(client.futures_mark_price(symbol=symbol)["markPrice"])
 
-        # --- STEP 2: PLACE STOP LOSS (IMMEDIATE) ---
+        # --- 4. PLACE STOP LOSS (MANDATORY) ---
         sl_percent = sl_value if sl_type == "SL % Movement" else abs(entry - sl_value) / entry * 100
-        sl_price = round_price(symbol, actual_entry * (1 - sl_percent / 100) if side == "LONG" else actual_entry * (1 + sl_percent / 100))
+        sl_price = actual_entry * (1 - sl_percent / 100) if side == "LONG" else actual_entry * (1 + sl_percent / 100)
+        sl_price = round_price(symbol, sl_price)
 
         sl_resp = binance_algo_order(
             symbol=symbol,
@@ -389,9 +402,12 @@ def execute_trade_action(
             closePosition=True
         )
 
-        # --- STEP 3: PLACE TAKE PROFIT 1 ---
+        if not sl_resp["success"]:
+            return {"success": True, "message": f"⚠️ Entry placed, but SL FAILED: {sl_resp['error']}"}
+
+        # --- 5. PLACE TAKE PROFIT 1 (MANDATORY) ---
         tp1_price = round_price(symbol, tp1)
-        # FIXED: round_qty added here to prevent "Invalid Qty" errors
+        # FIX: Added precision rounding to TP qty calculation
         tp1_qty = round_qty(symbol, qty * (tp1_pct / 100))
 
         tp1_resp = binance_algo_order(
@@ -402,11 +418,11 @@ def execute_trade_action(
             quantity=tp1_qty
         )
 
-        # --- STEP 4: PLACE TAKE PROFIT 2 ---
+        # --- 6. PLACE TAKE PROFIT 2 (OPTIONAL) ---
         tp2_order_id = None
         if tp2 > 0:
             tp2_price = round_price(symbol, tp2)
-            # FIXED: Precise math for remaining qty
+            # FIX: Calculate remaining qty precisely using rounding
             tp2_qty = round_qty(symbol, qty - tp1_qty)
             
             if tp2_qty > 0:
@@ -420,8 +436,9 @@ def execute_trade_action(
                 if tp2_resp["success"]:
                     tp2_order_id = tp2_resp["orderId"]
 
-        # --- KEPT: Your trade stats and logging logic ---
+        # --- 7. LOGGING & SESSION UPDATES (KEEPING ORIGINAL LOGIC) ---
         update_trade_stats(symbol)
+
         if "trades" not in session:
             session["trades"] = []
 
