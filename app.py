@@ -177,5 +177,34 @@ def index():
         today_stats=today_stats
     )
 
+@app.route("/verify_orders/<symbol>")
+def verify_orders_api(symbol):
+    """Verify that TP/SL orders are placed for a symbol"""
+    try:
+        client = logic.get_client()
+        if client is None:
+            return jsonify({"success": False, "message": "Client not connected"})
+        
+        orders = client.futures_get_open_orders(symbol=symbol, recvWindow=10000)
+        tp_sl_orders = []
+        
+        for order in orders:
+            if order['type'] in ['STOP_MARKET', 'TAKE_PROFIT_MARKET']:
+                tp_sl_orders.append({
+                    'type': order['type'],
+                    'side': order['side'],
+                    'stopPrice': float(order['stopPrice']),
+                    'origQty': float(order['origQty']) if 'origQty' in order else None,
+                    'status': order['status']
+                })
+        
+        return jsonify({
+            "success": True,
+            "orders": tp_sl_orders,
+            "count": len(tp_sl_orders)
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)

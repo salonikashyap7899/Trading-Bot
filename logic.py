@@ -19,36 +19,53 @@ CACHE_DURATION = 5  # Cache duration in seconds
 
 def binance_algo_order(symbol, side, order_type, stopPrice, quantity=None, closePosition=False):
     """
-    STRICT FIX: Sends TP/SL orders with 'priceProtect' and 'MARK_PRICE' working type.
+    FIXED: Sends TP/SL orders with proper Binance Futures API
     """
-    url = "https://fapi.binance.com/fapi/v1/order"
-    timestamp = int(time.time() * 1000)
-
-    params = {
-        "symbol": symbol,
-        "side": side,
-        "type": order_type,
-        "stopPrice": stopPrice,
-        "timestamp": timestamp,
-        "recvWindow": 10000,
-        "workingType": "MARK_PRICE", # Ensures trigger uses Mark Price
-        "priceProtect": "TRUE"       # Protects against extreme wicks
-    }
-
-    if closePosition:
-        params["closePosition"] = "true"
-    else:
-        params["reduceOnly"] = "true"
-        params["quantity"] = quantity
-
-    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-    signature = hmac.new(config.BINANCE_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-    params["signature"] = signature
-
-    headers = {"X-MBX-APIKEY": config.BINANCE_KEY}
-    r = requests.post(url, params=params, headers=headers)
-    return r.json()
-
+    try:
+        client = get_client()
+        if client is None:
+            return {"success": False, "error": "Binance client not connected"}
+        
+        # Convert side string to Binance side
+        # For STOP_MARKET and TAKE_PROFIT_MARKET orders, side is opposite of position side
+        # If closePosition=True, we don't need quantity
+        
+        params = {
+            'symbol': symbol,
+            'side': side,  # 'SELL' for LONG positions, 'BUY' for SHORT positions
+            'type': order_type,
+            'stopPrice': stopPrice,
+            'workingType': 'MARK_PRICE',
+            'priceProtect': 'TRUE',
+            'recvWindow': 10000
+        }
+        
+        if closePosition:
+            params['closePosition'] = 'true'
+        else:
+            if quantity:
+                params['quantity'] = quantity
+            params['reduceOnly'] = 'true'
+        
+        print(f"📊 Placing {order_type} order for {symbol}:")
+        print(f"   Side: {side}, StopPrice: {stopPrice}, Qty: {quantity}")
+        
+        # Use Binance client to place order
+        order = client.futures_create_order(**params)
+        
+        return {
+            "success": True,
+            "orderId": order['orderId'],
+            "clientOrderId": order.get('clientOrderId', ''),
+            "price": order.get('price', ''),
+            "origQty": order.get('origQty', ''),
+            "executedQty": order.get('executedQty', ''),
+            "status": order.get('status', '')
+        }
+        
+    except Exception as e:
+        print(f"❌ Error placing {order_type} order for {symbol}: {e}")
+        return {"success": False, "error": str(e)}
 
 def sync_time_with_binance():
     """Sync local time with Binance server time"""
@@ -329,11 +346,10 @@ def execute_trade_action(
     tp1, tp1_pct, tp2
 ):
     """
-    FIXED: Execute trade with IMMEDIATE and MANDATORY SL, TP1, and TP2 placement.
-    Keeps original logging, margin checks, and session updates while fixing TP errors.
+    FIXED: Execute trade with IMMEDIATE TP/SL placement - CRITICAL FIX
     """
-
-    # --- 1. MANDATORY VALIDATION (KEEPING ORIGINAL LOGIC) ---
+    
+    # --- 1. MANDATORY VALIDATION ---
     if sl_value <= 0:
         return {"success": False, "message": "❌ Stop Loss is MANDATORY!"}
     
@@ -353,7 +369,7 @@ def execute_trade_action(
         if client is None:
             return {"success": False, "message": "❌ Binance client not connected"}
         
-        # --- 2. QUANTITY & LEVERAGE (WITH PRECISION FIX) ---
+        # --- 2. QUANTITY & LEVERAGE ---
         units = user_units if user_units > 0 else sizing["suggested_units"]
         qty = round_qty(symbol, units)
 
@@ -383,17 +399,33 @@ def execute_trade_action(
             recvWindow=10000
         )
 
-        # CRITICAL FIX: Wait 1 sec for order to register on Binance servers before sending TPs
-        time.sleep(1)
+        # Get actual fill price
+        time.sleep(0.5)  # Short delay for order to fill
+        actual_entry = get_live_price(symbol)
+        if not actual_entry:
+            # Fallback to mark price
+            mark_price_info = client.futures_mark_price(symbol=symbol)
+            actual_entry = float(mark_price_info['markPrice'])
 
-        # Get actual fill price or Mark Price fallback
-        actual_entry = float(client.futures_mark_price(symbol=symbol)["markPrice"])
+        print(f"✅ Entry executed at {actual_entry}")
 
-        # --- 4. PLACE STOP LOSS (MANDATORY) ---
-        sl_percent = sl_value if sl_type == "SL % Movement" else abs(entry - sl_value) / entry * 100
-        sl_price = actual_entry * (1 - sl_percent / 100) if side == "LONG" else actual_entry * (1 + sl_percent / 100)
+        # --- 4. CALCULATE SL PRICE ---
+        if sl_type == "SL % Movement":
+            sl_percent = sl_value
+        else:
+            sl_distance = abs(actual_entry - sl_value)
+            sl_percent = (sl_distance / actual_entry) * 100
+        
+        # Calculate SL price based on position side
+        if side == "LONG":
+            sl_price = actual_entry * (1 - sl_percent / 100)
+        else:  # SHORT
+            sl_price = actual_entry * (1 + sl_percent / 100)
+        
         sl_price = round_price(symbol, sl_price)
 
+        # --- 5. PLACE STOP LOSS (MANDATORY) ---
+        print(f"📉 Placing STOP LOSS at {sl_price}...")
         sl_resp = binance_algo_order(
             symbol=symbol,
             side=exit_side,
@@ -403,13 +435,24 @@ def execute_trade_action(
         )
 
         if not sl_resp["success"]:
-            return {"success": True, "message": f"⚠️ Entry placed, but SL FAILED: {sl_resp['error']}"}
+            # Try to cancel the position if SL fails
+            try:
+                client.futures_create_order(
+                    symbol=symbol,
+                    side=exit_side,
+                    type="MARKET",
+                    quantity=qty,
+                    recvWindow=10000
+                )
+            except:
+                pass
+            return {"success": False, "message": f"❌ SL placement failed: {sl_resp.get('error', 'Unknown error')}"}
 
-        # --- 5. PLACE TAKE PROFIT 1 (MANDATORY) ---
+        # --- 6. PLACE TAKE PROFIT 1 (MANDATORY) ---
         tp1_price = round_price(symbol, tp1)
-        # FIX: Added precision rounding to TP qty calculation
         tp1_qty = round_qty(symbol, qty * (tp1_pct / 100))
-
+        
+        print(f"📈 Placing TP1 at {tp1_price} for {tp1_qty} units...")
         tp1_resp = binance_algo_order(
             symbol=symbol,
             side=exit_side,
@@ -418,14 +461,17 @@ def execute_trade_action(
             quantity=tp1_qty
         )
 
-        # --- 6. PLACE TAKE PROFIT 2 (OPTIONAL) ---
+        if not tp1_resp["success"]:
+            return {"success": False, "message": f"❌ TP1 placement failed: {tp1_resp.get('error', 'Unknown error')}"}
+
+        # --- 7. PLACE TAKE PROFIT 2 (OPTIONAL) ---
         tp2_order_id = None
         if tp2 > 0:
             tp2_price = round_price(symbol, tp2)
-            # FIX: Calculate remaining qty precisely using rounding
             tp2_qty = round_qty(symbol, qty - tp1_qty)
             
             if tp2_qty > 0:
+                print(f"📈 Placing TP2 at {tp2_price} for {tp2_qty} units...")
                 tp2_resp = binance_algo_order(
                     symbol=symbol,
                     side=exit_side,
@@ -434,9 +480,9 @@ def execute_trade_action(
                     quantity=tp2_qty
                 )
                 if tp2_resp["success"]:
-                    tp2_order_id = tp2_resp["orderId"]
+                    tp2_order_id = tp2_resp.get("orderId")
 
-        # --- 7. LOGGING & SESSION UPDATES (KEEPING ORIGINAL LOGIC) ---
+        # --- 8. LOGGING & SESSION UPDATES ---
         update_trade_stats(symbol)
 
         if "trades" not in session:
@@ -449,8 +495,8 @@ def execute_trade_action(
             "entry": actual_entry,
             "qty": qty,
             "sl": sl_price,
-            "tp1": tp1,
-            "tp2": tp2,
+            "tp1": tp1_price,
+            "tp2": tp2_price if tp2 > 0 else None,
             "order_ids": {
                 "entry": entry_order['orderId'],
                 "sl": sl_resp.get("orderId"),
@@ -462,13 +508,17 @@ def execute_trade_action(
 
         return {
             "success": True,
-            "message": f"✅ All Orders Placed! Entry: {actual_entry} | SL: {sl_price} | TP1: {tp1_price}"
+            "message": f"✅ All Orders Placed Successfully!\n" +
+                      f"• Entry: {actual_entry:.4f} | Qty: {qty}\n" +
+                      f"• SL: {sl_price:.4f} (-{sl_percent:.2f}%)\n" +
+                      f"• TP1: {tp1_price:.4f} ({tp1_qty} units)\n" +
+                      f"• TP2: {tp2_price:.4f if tp2 > 0 else 'Not set'}"
         }
 
     except Exception as e:
+        print(f"❌ Trade execution error: {e}")
         traceback.print_exc()
-        return {"success": False, "message": str(e)}
-
+        return {"success": False, "message": f"❌ Error: {str(e)}"}
 def partial_close_position(symbol, close_percent=None, close_qty=None):
     try:
         client = get_client()
