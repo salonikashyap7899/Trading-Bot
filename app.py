@@ -68,6 +68,8 @@ def update_sl_api():
     result = logic.update_stop_loss(symbol, new_sl_percent)
     return jsonify(result)
 
+
+
 @app.route("/download_trades")
 def download_trades():
     """Download trade history as CSV"""
