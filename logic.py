@@ -31,52 +31,63 @@ def place_algo_order(
     workingType="MARK_PRICE",
     priceProtect=True
 ):
-    """
-    Place STOP_MARKET / TAKE_PROFIT_MARKET using NEW Algo Orders endpoint
-    This should fix error -4120
-    """
     try:
         client = get_client()
         if client is None:
-            return {"success": False, "error": "Binance client not connected"}
+            return {"success": False, "error": "Client not connected"}
+
+        api_key    = client.API_KEY
+        api_secret = client.API_SECRET
+
+        if not api_key or not api_secret:
+            return {"success": False, "error": "API key or secret not set in Client"}
+
+        timestamp = int(time.time() * 1000)
 
         params = {
             'symbol': symbol,
             'side': side,
             'type': order_type,
-            'stopPrice': "{:.8f}".format(float(stopPrice)),  # Higher precision to avoid rounding issues
+            'stopPrice': f"{float(stopPrice):.8f}",
             'workingType': workingType,
             'priceProtect': "TRUE" if priceProtect else "FALSE",
             'reduceOnly': "TRUE" if reduceOnly else "FALSE",
+            'timestamp': timestamp,
             'recvWindow': 10000
         }
 
         if closePosition:
             params['closePosition'] = 'true'
-            params['reduceOnly'] = 'false'  # reduceOnly should be false when closePosition=true
-        elif quantity is not None and quantity > 0:
-            params['quantity'] = "{:.6f}".format(float(quantity))  # Safe precision for quantity
+        elif quantity is not None and float(quantity) > 0:
+            params['quantity'] = f"{float(quantity):.6f}"
 
-        print(f"Placing ALGO order: {order_type} | {side} | stopPrice={stopPrice} | qty={quantity} | close={closePosition}")
-        print("→ ALGO ORDER PARAMS:", params)
+        query_string = '&'.join([f"{k}={v}" for k, v in sorted(params.items())])
+        signature = hmac.new(
+            api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
 
-        # ── This is the important change ────────────────────────────
-        order = client.futures_create_algo_order(**params)
-        # ─────────────────────────────────────────────────────────────
+        params['signature'] = signature
 
-        return {
-            "success": True,
-            "algoId": order.get('algoId'),
-            "clientAlgoId": order.get('clientAlgoId', ''),
-            "status": order.get('status', '')
-        }
+        url = "https://fapi.binance.com/fapi/v1/algoOrder"
+        headers = {'X-MBX-APIKEY': api_key}
 
-    except BinanceAPIException as e:
-        error_msg = f"Binance Algo Order Error: {e.code} - {e.message}"
-        print(error_msg)
-        return {"success": False, "error": error_msg, "code": e.code}
+        print("→ Sending algo order:", params)
+
+        response = requests.post(url, headers=headers, params=params)
+        data = response.json()
+
+        if response.status_code == 200 and 'algoId' in data:
+            print("→ SUCCESS:", data)
+            return {"success": True, "algoId": data['algoId'], "status": data.get('status', 'NEW')}
+        else:
+            error_msg = data.get('msg', response.text)
+            print("→ FAILED:", error_msg)
+            return {"success": False, "error": error_msg}
+
     except Exception as e:
-        print(f"Error placing algo order: {e}")
+        print("Algo order error:", str(e))
         return {"success": False, "error": str(e)}
 
 
