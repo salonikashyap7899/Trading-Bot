@@ -1,5 +1,5 @@
-# # config.py
-# # Binance Credentials - IMPORTANT: Keep these secure!
+# config.py
+# Binance Credentials - IMPORTANT: Keep these secure!
 
 BINANCE_KEY = 'iyK0QCtq44CZb7K5BlRcZPCrjn2i7zeL52KQXxs9654NWkQnfQIvm1rKBaNhbXob'
 BINANCE_SECRET = 'EowxqqSJr8vD15Bk8oUGArIn9TrYaXlmPjoccV7TVLqLFZ7aqId3KzJY9l5iurOp'
@@ -27,56 +27,44 @@ BINANCE_SECRET = 'EowxqqSJr8vD15Bk8oUGArIn9TrYaXlmPjoccV7TVLqLFZ7aqId3KzJY9l5iur
 # # config.py
 # Binance Futures Trading Configuration
 # IMPORTANT: NEVER commit this file to git with real keys!
-# config.py
-# Binance Futures Trading Configuration
-# IMPORTANT: NEVER commit this file to git with real keys!
 
 import os
 
 # ────────────────────────────────────────────────────────────────
-#  Preferred method: Load keys from environment variables
+#          OPTION 1: Use environment variables (recommended)
 # ────────────────────────────────────────────────────────────────
-# Set these in your terminal before running the app:
+# Best practice: set these in terminal or .env file
 #
-# Windows (Command Prompt):
-# set BINANCE_API_KEY=your_actual_key_here
-# set BINANCE_API_SECRET=your_actual_secret_here
-# python app.py
+# Windows (cmd):
+# set BINANCE_API_KEY=your_key_here
+# set BINANCE_API_SECRET=your_secret_here
 #
 # Linux/Mac:
-# export BINANCE_API_KEY=your_actual_key_here
-# export BINANCE_API_SECRET=your_actual_secret_here
-# python app.py
+# export BINANCE_API_KEY=your_key_here
+# export BINANCE_API_SECRET=your_secret_here
 
-API_KEY    = os.getenv('BINANCE_API_KEY')
+API_KEY = os.getenv('BINANCE_API_KEY')
 API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # ────────────────────────────────────────────────────────────────
-#  Fallback - Hardcode ONLY for LOCAL TESTING (NOT RECOMMENDED!)
-#  → Use only temporarily, then delete or comment out!
+#          OPTION 2: Hardcode (ONLY for local testing - NOT safe!)
 # ────────────────────────────────────────────────────────────────
-# API_KEY    = 'your_new_key_here_after_revoke'
-# API_SECRET = 'your_new_secret_here_after_revoke'
+# Uncomment only if you really can't use environment variables
+# And DELETE / CHANGE these keys immediately after testing!
+#
+# API_KEY    = 'iyK0QCtq44CZb7K5BlRcZPCrjn2i7zeL52KQXxs9654NWkQnfQIvm1rKBaNhbXob'
+# API_SECRET = 'EowxqqSJr8vD15Bk8oUGArIn9TrYaXlmPjoccV7TVLqLFZ7aqId3KzJY9l5iurOp'
 
 # ────────────────────────────────────────────────────────────────
-#  Critical safety check - fail early if keys are missing
+#              Safety check - very important!
 # ────────────────────────────────────────────────────────────────
 if not API_KEY or not API_SECRET:
     raise ValueError(
-        "!!! CRITICAL SECURITY ERROR !!!\n"
-        "Binance API key or secret is missing!\n\n"
-        "You MUST do one of the following:\n"
-        "1. Set environment variables BINANCE_API_KEY and BINANCE_API_SECRET\n"
-        "   (recommended & safest method)\n"
-        "   Example:\n"
-        "   export BINANCE_API_KEY=...\n"
-        "   export BINANCE_API_SECRET=...\n\n"
-        "2. Or temporarily uncomment the hardcoded values below\n"
-        "(but delete them after testing!)\n\n"
-        "Your current config is NOT loading any real keys!"
+        "!!! CRITICAL ERROR !!!\n"
+        "Binance API key or secret is missing!\n"
+        "Please set BINANCE_API_KEY and BINANCE_API_SECRET environment variables\n"
+        "or uncomment and fill the hardcoded values (but only for testing!)"
     )
-
-print("✓ Binance API keys loaded successfully (length check passed)")
 
 # ────────────────────────────────────────────────────────────────
 #                   Trading Configuration
@@ -104,9 +92,13 @@ RETRY_DELAY = 1                 # seconds between retries
 # ────────────────────────────────────────────────────────────────
 #                   Optional - Testnet support
 # ────────────────────────────────────────────────────────────────
-USE_TESTNET = False  # ← Change to True when testing (strongly recommended!)
+USE_TESTNET = False  # Change to True when testing!!!
 
 if USE_TESTNET:
-    print("!!! WARNING: USING BINANCE FUTURES TESTNET MODE !!!")
-    # Note: Most recent python-binance versions support:
-    # client = Client(API_KEY, API_SECRET, testnet=True)
+    print("!!! USING BINANCE FUTURES TESTNET !!!")
+    # Testnet base URLs (add to Client initialization if needed)
+    # Client(..., testnet=True) usually handles this automatically
+
+
+
+

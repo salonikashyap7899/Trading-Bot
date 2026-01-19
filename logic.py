@@ -103,14 +103,21 @@ def sync_time_with_binance():
         print(f"⚠️ Could not sync time: {e}")
         return 0
 
+_balance_cache = {"data": (None, None), "time": 0}
+BALANCE_CACHE_DURATION = 3  # Keep balance cached for 3 seconds
 
-def get_client():
-    """Get or create Binance client with error handling"""
+def get_client(force_refresh=False):
+    """Get Binance client with auto-refresh capability"""
     global _client
+    
+    # If we need to force a new connection (e.g. after a timeout)
+    if force_refresh:
+        _client = None
+
     if _client is None:
         try:
+            # 1. Sync time first (Crucial for recvWindow errors)
             time_offset = sync_time_with_binance()
-            print(f"⏰ Time offset with Binance: {time_offset}ms")
             
             _client = Client(
                 config.BINANCE_KEY, 
@@ -118,17 +125,19 @@ def get_client():
                 {'timeout': 20}
             )
             
-            if abs(time_offset) > 1000:
+            # 2. Apply offset manually if needed
+            if abs(time_offset) > 0:
                 _client.timestamp_offset = time_offset
-                print(f"✅ Applied time offset: {time_offset}ms")
-            
+                
+            # 3. Test connection
             _client.futures_account(recvWindow=60000)
-            print("✅ Binance client initialized successfully")
+            print("✅ Binance Client Connected Successfully")
+            
         except Exception as e:
             print(f"❌ Error initializing Binance client: {e}")
             _client = None
+            
     return _client
-
 
 def initialize_session():
     if "trades" not in session:
@@ -160,14 +169,68 @@ def get_all_exchange_symbols():
 
 
 def get_live_balance():
-    try:
-        client = get_client()
-        if client is None: return None, None
-        acc = client.futures_account(recvWindow=10000)
-        return float(acc["totalWalletBalance"]), float(acc["totalInitialMargin"])
-    except Exception as e:
-        print(f"Error getting balance: {e}")
-        return None, None
+    """
+    Robust balance fetcher with Retries + Caching + Error Handling
+    """
+    global _balance_cache, _client
+    
+    # 1. Return Cache if valid (Prevents API spamming)
+    if time.time() - _balance_cache["time"] < BALANCE_CACHE_DURATION:
+        if _balance_cache["data"][0] is not None:
+            return _balance_cache["data"]
+
+    # 2. Retry Loop (Handles network hiccups)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = get_client()
+            if client is None:
+                # If client is dead, try to force refresh it once
+                if attempt == 0:
+                    client = get_client(force_refresh=True)
+                if client is None:
+                    break
+
+            # 3. The API Call
+            # Increased recvWindow to 60000 (60s) to allow for higher latency
+            acc = client.futures_account(recvWindow=60000)
+            
+            bal = float(acc["totalWalletBalance"])
+            margin = float(acc["totalInitialMargin"])
+            
+            # 4. Success? Update Cache
+            _balance_cache["data"] = (bal, margin)
+            _balance_cache["time"] = time.time()
+            return bal, margin
+
+        except BinanceAPIException as e:
+            print(f"⚠️ Binance API Error (Attempt {attempt+1}/{max_retries}): {e}")
+            
+            # Error -1021 is "Timestamp for this request is outside of the recvWindow"
+            # If this happens, we MUST re-sync time
+            if e.code == -1021:
+                print("⏳ Timestamp out of sync. Re-syncing...")
+                sync_time_with_binance()
+                # Force client refresh next loop
+                _client = None 
+            
+            time.sleep(0.5) # Wait slightly before retry
+
+        except (ReadTimeout, ConnectionError) as e:
+            print(f"⚠️ Network Error (Attempt {attempt+1}/{max_retries}): {e}")
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"❌ Critical Error getting balance: {e}")
+            break
+
+    # 5. Fallback: If all retries failed, return the LAST KNOWN good balance
+    # instead of returning None (which shows 0.0)
+    if _balance_cache["data"][0] is not None:
+        print("⚠️ Returning stale balance data due to connection failure")
+        return _balance_cache["data"]
+
+    return None, None
 
 
 def get_live_price(symbol):
